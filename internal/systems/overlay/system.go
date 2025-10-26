@@ -3,8 +3,8 @@ package overlay
 import (
 	"log"
 	"time"
-
 	"image/color"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"golang.org/x/image/font/basicfont"
@@ -12,66 +12,92 @@ import (
 	"gost/internal/events"
 )
 
-// System renders transient messages like "Copied ✓" or system notices.
-type System struct {
-	bus   *events.Bus
-	msg   string
-	alpha float64
-	timer time.Time
+// Message represents a transient on-screen notice.
+type Message struct {
+	Text   string
+	Alpha  float64
+	Timer  time.Time
+	Expire float64 // lifetime in seconds
 }
 
-// NewSystem subscribes to clipboard events and initializes HUD state.
+// System renders transient messages like “Copied ✓” or warnings.
+type System struct {
+	bus      *events.Bus
+	messages []Message
+}
+
+// NewSystem subscribes to events and initializes the overlay HUD.
 func NewSystem(bus *events.Bus) *System {
 	os := &System{bus: bus}
 
-	sub := bus.Subscribe("clipboard_copy")
+	// Clipboard copy message
+	subClip := bus.Subscribe("clipboard_copy")
 	go func() {
-		for evt := range sub {
+		for evt := range subClip {
 			txt, ok := evt.(string)
 			if !ok {
 				continue
 			}
 			log.Printf("[Overlay] Copied %d chars", len(txt))
-			os.showMessage("Copied ✓")
+			os.AddMessage("Copied ✓")
+		}
+	}()
+
+	// Generic system message event
+	subMsg := bus.Subscribe("overlay_message")
+	go func() {
+		for evt := range subMsg {
+			if msg, ok := evt.(string); ok {
+				os.AddMessage(msg)
+			}
 		}
 	}()
 
 	return os
 }
 
-// showMessage displays a HUD message for a short duration.
-func (s *System) showMessage(text string) {
-	s.msg = text
-	s.alpha = 1.0
-	s.timer = time.Now()
+// AddMessage queues a new transient HUD message.
+func (s *System) AddMessage(text string) {
+	s.messages = append(s.messages, Message{
+		Text:   text,
+		Alpha:  1.0,
+		Timer:  time.Now(),
+		Expire: 3.0,
+	})
 }
 
-// UpdateECS handles fade-out logic over time.
+// UpdateECS handles fade-out logic for all active messages.
 func (s *System) UpdateECS() {
-	if s.msg == "" {
-		return
-	}
-	elapsed := time.Since(s.timer).Seconds()
-	if elapsed > 2.0 {
-		s.alpha -= 0.05
-		if s.alpha <= 0 {
-			s.msg = ""
-			s.alpha = 0
+	now := time.Now()
+	newList := s.messages[:0]
+
+	for _, m := range s.messages {
+		elapsed := now.Sub(m.Timer).Seconds()
+		if elapsed < m.Expire {
+			// Start fading out after 2s
+			if elapsed > m.Expire-1.0 {
+				m.Alpha = 1.0 - (elapsed-(m.Expire-1.0))
+			}
+			newList = append(newList, m)
 		}
 	}
+	s.messages = newList
 }
 
-// DrawOverlay renders the current HUD message.
+// DrawOverlay renders all active messages near the bottom of the screen.
 func (s *System) DrawOverlay(screen *ebiten.Image, width, height int) {
-	if s.msg == "" {
+	if len(s.messages) == 0 {
 		return
 	}
 
-	clr := color.RGBA{255, 255, 255, uint8(s.alpha * 255)}
-	textW := len(s.msg) * 8
-	x := (width - textW) / 2
-	y := height - 20 // bottom area of the screen
-
-	text.Draw(screen, s.msg, basicfont.Face7x13, x, y, clr)
+	y := height - 20
+	for i := len(s.messages) - 1; i >= 0; i-- {
+		m := s.messages[i]
+		clr := color.RGBA{255, 255, 255, uint8(m.Alpha * 255)}
+		textW := len(m.Text) * 8
+		x := (width - textW) / 2
+		text.Draw(screen, m.Text, basicfont.Face7x13, x, y, clr)
+		y -= 16 // stack upwards
+	}
 }
 
