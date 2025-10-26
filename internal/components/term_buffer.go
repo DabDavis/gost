@@ -1,6 +1,10 @@
 package components
 
-import "sync"
+import (
+	"sync"
+
+	"gost/internal/events"
+)
 
 // Glyph represents a single character cell on the terminal screen.
 type Glyph struct {
@@ -12,10 +16,12 @@ type Glyph struct {
 // TermBuffer represents the full 2D terminal screen —
 // storing all visible characters and their attributes.
 type TermBuffer struct {
-	mu                sync.RWMutex
-	Width, Height     int
-	Cells             [][]Glyph
-	CursorX, CursorY  int
+	mu               sync.RWMutex
+	Width, Height    int
+	Cells            [][]Glyph
+	CursorX, CursorY int
+
+	bus *events.Bus // optional event bus for scrollback integration
 }
 
 // NewTermBuffer allocates a new blank terminal buffer of given size.
@@ -30,6 +36,13 @@ func NewTermBuffer(width, height int) *TermBuffer {
 	}
 	tb.Clear()
 	return tb
+}
+
+// AttachBus links an event bus to the TermBuffer, enabling it to emit events.
+func (tb *TermBuffer) AttachBus(bus *events.Bus) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.bus = bus
 }
 
 // Clear wipes the screen, resetting all cells to a blank space.
@@ -67,18 +80,37 @@ func (tb *TermBuffer) GetRune(x, y int) Glyph {
 	return tb.Cells[y][x]
 }
 
-// ScrollUp shifts all lines up by one and clears the last row.
+// ScrollUp shifts all lines up by one, clears the last row,
+// and emits the top line as a "term_scrolled" event if a bus is attached.
 func (tb *TermBuffer) ScrollUp() {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
+	if tb.Height == 0 || tb.Width == 0 {
+		return
+	}
+
+	// Copy the top line before shifting
+	topLine := make([]Glyph, tb.Width)
+	copy(topLine, tb.Cells[0])
+
+	// Scroll contents up
 	copy(tb.Cells, tb.Cells[1:])
 	tb.Cells[tb.Height-1] = make([]Glyph, tb.Width)
 	for x := range tb.Cells[tb.Height-1] {
 		tb.Cells[tb.Height-1][x] = Glyph{Rune: ' ', Fg: 7, Bg: 0}
 	}
+
+	// Move cursor up one if needed
 	if tb.CursorY > 0 {
 		tb.CursorY--
+	}
+
+	// Emit scroll event if bus is attached — async to avoid blocking
+	if tb.bus != nil {
+		lineCopy := make([]Glyph, len(topLine))
+		copy(lineCopy, topLine)
+		go tb.bus.Publish("term_scrolled", lineCopy)
 	}
 }
 
@@ -106,7 +138,25 @@ func (tb *TermBuffer) Resize(newW, newH int) {
 	}
 }
 
-// min utility
+// --- Safe cursor access ---
+
+// SetCursor safely updates cursor position.
+func (tb *TermBuffer) SetCursor(x, y int) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.CursorX = x
+	tb.CursorY = y
+}
+
+// GetCursor safely retrieves cursor position.
+func (tb *TermBuffer) GetCursor() (int, int) {
+	tb.mu.RLock()
+	defer tb.mu.RUnlock()
+	return tb.CursorX, tb.CursorY
+}
+
+// --- Helpers ---
+
 func min(a, b int) int {
 	if a < b {
 		return a

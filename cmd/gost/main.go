@@ -8,6 +8,7 @@ import (
 
 	"gost/internal/ecs"
 	"gost/internal/events"
+	"gost/internal/components"
 
 	// Modular ECS systems
 	"gost/internal/systems/input"
@@ -16,6 +17,7 @@ import (
 	"gost/internal/systems/render"
 	"gost/internal/systems/cursor"
 	"gost/internal/systems/selection"
+	"gost/internal/systems/scrollback"
 )
 
 // GameSystem wraps the ECS world and delegates rendering to Ebiten.
@@ -75,13 +77,20 @@ func main() {
 	bus := events.NewBus()
 	world := ecs.NewWorld()
 
+	// --- Core terminal components ---
+	termBuffer := components.NewTermBuffer(80, 24)
+	termBuffer.AttachBus(bus)
+	scrollbackBuf := components.NewScrollback(1000)
+
 	// --- Instantiate modular systems ---
 	ptySys := pty.NewSystem(bus)
 	parserSys := parser.NewSystem(bus)
 	renderSys := render.NewSystem(bus)
+	renderSys.AttachScrollback(scrollbackBuf) // link scrollback to renderer
 	inputSys := input.NewSystem(bus)
 	cursorSys := cursor.NewSystem(bus, 7, 14)
 	selectionSys := selection.NewSystem(renderSys.Buffer(), 7, 14)
+	scrollbackSys := scrollback.NewSystem(bus, termBuffer, scrollbackBuf)
 
 	// --- Register all systems with the ECS world ---
 	world.AddSystem(ptySys)
@@ -90,6 +99,7 @@ func main() {
 	world.AddSystem(inputSys)
 	world.AddSystem(cursorSys)
 	world.AddSystem(selectionSys)
+	world.AddSystem(scrollbackSys)
 
 	// --- Subscribe to exit signal ---
 	exitSub := bus.Subscribe("system_exit")
