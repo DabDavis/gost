@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -24,11 +25,21 @@ type GameSystem struct {
 	renderSys    *render.System
 	cursorSys    *cursor.System
 	selectionSys *selection.System
+	exitSub      <-chan events.Event
 }
 
 // Update runs every tick (~60 Hz) and advances all ECS systems.
 func (g *GameSystem) Update() error {
 	g.world.Update()
+
+	// Check for "system_exit" event
+	select {
+	case <-g.exitSub:
+		log.Println("[GoST] Received system_exit event — shutting down gracefully.")
+		os.Exit(0)
+	default:
+	}
+
 	return nil
 }
 
@@ -80,6 +91,9 @@ func main() {
 	world.AddSystem(cursorSys)
 	world.AddSystem(selectionSys)
 
+	// --- Subscribe to exit signal ---
+	exitSub := bus.Subscribe("system_exit")
+
 	// --- Wrap ECS in Ebiten adapter ---
 	game := &GameSystem{
 		world:        world,
@@ -87,6 +101,7 @@ func main() {
 		renderSys:    renderSys,
 		cursorSys:    cursorSys,
 		selectionSys: selectionSys,
+		exitSub:      exitSub,
 	}
 
 	// --- Ebiten setup ---
