@@ -18,7 +18,6 @@ type System struct {
 func NewSystem(bus *events.Bus) *System {
 	ps := &System{bus: bus}
 
-	// Input system writes directly to PTY.
 	input.WriteToPTY = func(b []byte) {
 		globalPTY.mu.Lock()
 		defer globalPTY.mu.Unlock()
@@ -53,6 +52,7 @@ func (s *System) UpdateECS() {
 	globalPTY.f = f
 	log.Println("[PTY] started shell:", shell)
 
+	startResizeWatcher(f, 7, 14)
 	go s.readLoop(f, cmd)
 }
 

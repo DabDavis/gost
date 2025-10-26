@@ -53,6 +53,14 @@ func (r *System) AttachScrollback(sb *components.Scrollback) {
 	r.scrollback = sb
 }
 
+// AttachTerm links the renderer to the TermBuffer for drawing live output.
+func (r *System) AttachTerm(tb *components.TermBuffer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.term = tb
+}
+
+
 // Buffer exposes the current terminal buffer.
 func (r *System) Buffer() *components.TermBuffer {
 	r.mu.RLock()

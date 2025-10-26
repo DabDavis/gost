@@ -7,20 +7,17 @@ func (s *System) putChar(r rune) {
 	switch r {
 	case '\r': // carriage return
 		s.cx = 0
-
 	case '\n': // newline
 		s.cy++
 		if s.cy >= s.buffer.Height {
 			s.buffer.ScrollUp()
 			s.cy = s.buffer.Height - 1
 		}
-
 	case '\b': // backspace
 		if s.cx > 0 {
 			s.cx--
 			s.buffer.SetRune(s.cx, s.cy, ' ', s.fg, s.bg)
 		}
-
 	default:
 		if unicode.IsPrint(r) {
 			if s.cx >= s.buffer.Width {
@@ -35,32 +32,26 @@ func (s *System) putChar(r rune) {
 			s.cx++
 		}
 	}
-
 	s.clipCursor()
 	s.syncCursor()
 }
 
 // eraseToLineEnd implements ESC[K.
 func (s *System) eraseToLineEnd() {
-	y := s.cy
 	for x := s.cx; x < s.buffer.Width; x++ {
-		s.buffer.SetRune(x, y, ' ', s.fg, s.bg)
+		s.buffer.SetRune(x, s.cy, ' ', s.fg, s.bg)
 	}
 }
 
-// eraseFromLineStart implements ESC[1K.
 func (s *System) eraseFromLineStart() {
-	y := s.cy
 	for x := 0; x <= s.cx; x++ {
-		s.buffer.SetRune(x, y, ' ', s.fg, s.bg)
+		s.buffer.SetRune(x, s.cy, ' ', s.fg, s.bg)
 	}
 }
 
-// eraseFullLine implements ESC[2K.
 func (s *System) eraseFullLine() {
-	y := s.cy
 	for x := 0; x < s.buffer.Width; x++ {
-		s.buffer.SetRune(x, y, ' ', s.fg, s.bg)
+		s.buffer.SetRune(x, s.cy, ' ', s.fg, s.bg)
 	}
 	s.cx = 0
 }
@@ -84,7 +75,7 @@ func (s *System) syncCursor() {
 	s.buffer.SetCursor(s.cx, s.cy)
 }
 
-// --- lightweight string builder ---
+// lightweight rune builder (avoids allocations)
 type stringBuilder struct{ buf []rune }
 
 func (b *stringBuilder) Reset()           { b.buf = b.buf[:0] }

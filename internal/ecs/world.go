@@ -1,55 +1,85 @@
 package ecs
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
-// System represents a modular ECS system with a single UpdateECS tick method.
+// System defines a modular ECS component that can be updated every frame.
+// Systems are expected to be self-contained and thread-safe where applicable.
 type System interface {
 	UpdateECS()
 }
 
-// World is the central ECS container that manages systems and their updates.
-type World struct {
-	systems []System
-	mu      sync.RWMutex
+// systemEntry pairs a system with its execution priority.
+type systemEntry struct {
+	System   System
+	Priority int
 }
 
-// NewWorld creates an empty ECS world instance.
+// World coordinates all ECS systems and manages their update order.
+type World struct {
+	mu       sync.RWMutex
+	systems  []systemEntry
+	sorted   bool
+	sortOnce sync.Once
+}
+
+// NewWorld initializes a new ECS World instance with small preallocation.
 func NewWorld() *World {
 	return &World{
-		systems: make([]System, 0, 8), // small preallocation
+		systems: make([]systemEntry, 0, 8),
 	}
 }
 
-// AddSystem registers a new ECS system in the world.
-func (w *World) AddSystem(s System) {
+// AddSystem registers a system with an explicit priority.
+// Lower priorities execute earlier each frame (e.g., input before render).
+func (w *World) AddSystem(s System, priority int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.systems = append(w.systems, s)
+
+	w.systems = append(w.systems, systemEntry{
+		System:   s,
+		Priority: priority,
+	})
+	w.sorted = false
 }
 
-// RemoveSystem removes a system from the ECS world (optional utility).
+// RemoveSystem unregisters a specific system from the world.
 func (w *World) RemoveSystem(target System) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for i, s := range w.systems {
-		if s == target {
+
+	for i, entry := range w.systems {
+		if entry.System == target {
 			w.systems = append(w.systems[:i], w.systems[i+1:]...)
+			w.sorted = false
 			break
 		}
 	}
 }
 
-// Update ticks all registered systems once per frame (~60Hz typical).
+// Update runs all registered systems once per tick (~60Hz typical).
+// Systems are executed in ascending priority order.
 func (w *World) Update() {
+	w.mu.Lock()
+	if !w.sorted {
+		sort.SliceStable(w.systems, func(i, j int) bool {
+			return w.systems[i].Priority < w.systems[j].Priority
+		})
+		w.sorted = true
+	}
+	w.mu.Unlock()
+
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	for _, s := range w.systems {
-		s.UpdateECS()
+	for _, entry := range w.systems {
+		entry.System.UpdateECS()
 	}
 }
 
-// Count returns the number of active systems in the ECS world.
+// Count returns the number of active ECS systems.
 func (w *World) Count() int {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
