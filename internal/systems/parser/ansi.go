@@ -10,7 +10,9 @@ func (s *System) feed(data string) {
 	for _, r := range data {
 		switch s.state {
 
-		// --- Normal text ---
+		// ------------------------------------------------------------
+		// Normal text mode
+		// ------------------------------------------------------------
 		case stateText:
 			if r == 0x1b { // ESC
 				s.state = stateEsc
@@ -19,7 +21,9 @@ func (s *System) feed(data string) {
 				s.putChar(r)
 			}
 
-		// --- ESC prefix ---
+		// ------------------------------------------------------------
+		// ESC prefix — begin special sequence
+		// ------------------------------------------------------------
 		case stateEsc:
 			switch r {
 			case '[':
@@ -37,11 +41,12 @@ func (s *System) feed(data string) {
 				s.syncCursor()
 				s.state = stateText
 			default:
-				// Unrecognized single-char ESC — ignore
-				s.state = stateText
+				s.state = stateText // unknown ESC
 			}
 
-		// --- CSI: ESC [ ... command ---
+		// ------------------------------------------------------------
+		// CSI: ESC [ ... command
+		// ------------------------------------------------------------
 		case stateCSI:
 			s.escBuf.WriteRune(r)
 			if r >= '@' && r <= '~' {
@@ -49,7 +54,9 @@ func (s *System) feed(data string) {
 				s.state = stateText
 			}
 
-		// --- OSC: ESC ] ... BEL or ESC \ terminates ---
+		// ------------------------------------------------------------
+		// OSC: ESC ] ... terminated by BEL or ESC \
+		// ------------------------------------------------------------
 		case stateOsc:
 			if r == '\a' {
 				s.execOSC(s.escBuf.String())
@@ -63,6 +70,10 @@ func (s *System) feed(data string) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// CSI HANDLER
+// -----------------------------------------------------------------------------
 
 // execCSI interprets CSI (ESC [) control sequences.
 func (s *System) execCSI(seq string) {
@@ -94,6 +105,7 @@ func (s *System) execCSI(seq string) {
 		s.cx += nums[0]
 	case 'D': // cursor left
 		s.cx -= nums[0]
+
 	case 'H', 'f': // move to row;col
 		y, x := 1, 1
 		if len(nums) >= 2 {
@@ -106,6 +118,7 @@ func (s *System) execCSI(seq string) {
 			s.buffer.Clear()
 			s.cx, s.cy = 0, 0
 		}
+
 	case 'K': // erase line variants
 		switch nums[0] {
 		case 0:
@@ -115,8 +128,10 @@ func (s *System) execCSI(seq string) {
 		case 2:
 			s.eraseFullLine()
 		}
-	case 'm': // colors
+
+	case 'm': // SGR (Select Graphic Rendition)
 		s.execSGR(nums)
+
 	default:
 		// unsupported CSI, ignore gracefully
 	}
@@ -125,41 +140,116 @@ func (s *System) execCSI(seq string) {
 	s.syncCursor()
 }
 
-// execOSC handles OSC (Operating System Command) sequences.
+// -----------------------------------------------------------------------------
+// OSC HANDLER
+// -----------------------------------------------------------------------------
+
+// execOSC handles OSC (Operating System Command) sequences like ESC ] 0;title BEL.
 func (s *System) execOSC(seq string) {
-	// OSC examples:
-	//   ESC ] 0;title BEL   → set title
-	//   ESC ] 2;title BEL   → set icon/title
 	if strings.HasPrefix(seq, "0;") || strings.HasPrefix(seq, "2;") {
-		// ignore safely (title updates)
+		// ignore window title updates
 		return
 	}
-	// unsupported OSC codes ignored safely
+	// unsupported OSC codes are ignored safely
 }
 
-// execSGR applies color attributes and resets.
+// -----------------------------------------------------------------------------
+// SGR (Select Graphic Rendition) — Color + Attribute Handling
+// -----------------------------------------------------------------------------
+
+// execSGR applies color attributes (8,16,256,truecolor) and resets.
 func (s *System) execSGR(nums []int) {
 	if len(nums) == 0 {
 		nums = []int{0}
 	}
-	for _, n := range nums {
+
+	i := 0
+	for i < len(nums) {
+		n := nums[i]
+
 		switch {
-		case n == 0: // reset
+		// --- Reset ---
+		case n == 0:
 			s.fg, s.bg = 7, 0
-		case n >= 30 && n <= 37: // standard fg
+
+		// --- Standard 8 colors (30–37, 40–47) ---
+		case n >= 30 && n <= 37:
 			s.fg = n - 30
-		case n >= 40 && n <= 47: // standard bg
+		case n >= 40 && n <= 47:
 			s.bg = n - 40
-		case n >= 90 && n <= 97: // bright fg
+
+		// --- Bright 16 colors (90–97, 100–107) ---
+		case n >= 90 && n <= 97:
 			s.fg = (n - 90) + 8
-		case n >= 100 && n <= 107: // bright bg
+		case n >= 100 && n <= 107:
 			s.bg = (n - 100) + 8
-		// 256/24-bit color placeholders (for future)
+
+		// --- Extended color (256 or Truecolor) ---
 		case n == 38 || n == 48:
-			// skip next params (advanced colors)
+			if i+1 < len(nums) {
+				mode := nums[i+1]
+
+				switch mode {
+				case 5: // 256-color: ESC[38;5;n or ESC[48;5;n
+					if i+2 < len(nums) {
+						idx := clampColorIndex(nums[i+2])
+						if n == 38 {
+							s.fg = idx
+						} else {
+							s.bg = idx
+						}
+						i += 2
+					}
+
+				case 2: // Truecolor: ESC[38;2;r;g;b
+					if i+4 < len(nums) {
+						r, g, b := nums[i+2], nums[i+3], nums[i+4]
+						idx := rgbTo256(r, g, b)
+						if n == 38 {
+							s.fg = idx
+						} else {
+							s.bg = idx
+						}
+						i += 4
+					}
+				}
+			}
+
+		// --- Ignore bold, underline, etc. ---
 		default:
-			// ignore unsupported attributes (bold, underline, etc.)
+			// future styling: 1=bold,4=underline,etc.
 		}
+
+		i++
 	}
+}
+
+// clampColorIndex bounds a color index to valid 0–255.
+func clampColorIndex(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > 255 {
+		return 255
+	}
+	return n
+}
+
+// rgbTo256 approximates truecolor RGB to nearest 256-color index (6×6×6 cube).
+func rgbTo256(r, g, b int) int {
+	clamp := func(v int) int {
+		if v < 0 {
+			return 0
+		}
+		if v > 255 {
+			return 255
+		}
+		return v
+	}
+	r, g, b = clamp(r), clamp(g), clamp(b)
+	r6 := int(float64(r) / 255 * 5)
+	g6 := int(float64(g) / 255 * 5)
+	b6 := int(float64(b) / 255 * 5)
+	return 16 + (36*r6) + (6*g6) + b6
 }
 

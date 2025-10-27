@@ -1,77 +1,85 @@
 package cursor
 
 import (
-	"image/color"
 	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
-
-	"gost/internal/events"
 	"gost/internal/components"
+	"gost/internal/events"
 )
 
-// System draws a static cursor at the parser’s current position.
+// System handles cursor rendering & blink logic.
 type System struct {
-	bus   *events.Bus
-	mu    sync.RWMutex // protects term pointer
-	term  *components.TermBuffer
-	cellW int
-	cellH int
+	bus *events.Bus
+	mu  sync.RWMutex
+
+	term *components.TermBuffer
+	cellW, cellH int
+
+	style        cursorStyle
+	blinkVisible bool
+	lastBlink    time.Time
 }
 
-// NewSystem subscribes to "term_updated" events to track the buffer.
+// NewSystem creates a new cursor system with defaults and subscribes to events.
 func NewSystem(bus *events.Bus, cellW, cellH int) *System {
 	cs := &System{
 		bus:   bus,
 		cellW: cellW,
 		cellH: cellH,
+		style: defaultCursorStyle(),
+		blinkVisible: true,
+		lastBlink:    time.Now(),
 	}
 
-	sub := bus.Subscribe("term_updated")
-	go func() {
-		for evt := range sub {
-			if tb, ok := evt.(*components.TermBuffer); ok {
-				cs.mu.Lock()
-				cs.term = tb
-				cs.mu.Unlock()
-			}
-		}
-	}()
+	cs.subscribeTermUpdates()
+	cs.subscribeConfigChanges()
 	return cs
 }
 
-// UpdateECS does nothing — static cursor, no blinking.
-func (c *System) UpdateECS() {}
+// UpdateECS handles blinking state toggling.
+func (c *System) UpdateECS() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-// getTerm safely reads the current term pointer.
-func (c *System) getTerm() *components.TermBuffer {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.term
-}
-
-// DrawCursor renders the cursor as a solid rectangle or underline.
-func (c *System) DrawCursor(screen *ebiten.Image, cx, cy int) {
-	tb := c.getTerm()
-	if tb == nil {
+	if !c.style.Blink {
+		c.blinkVisible = true
 		return
 	}
+	if time.Since(c.lastBlink) > c.style.BlinkRate {
+		c.blinkVisible = !c.blinkVisible
+		c.lastBlink = time.Now()
+	}
+}
 
-	tbX, tbY := tb.GetCursor() // now uses thread-safe getter
+// DrawCursor renders the cursor shape if visible.
+func (c *System) DrawCursor(screen *ebiten.Image, cx, cy int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.blinkVisible || c.term == nil {
+		return
+	}
+	tb := c.term
+	tbX, tbY := tb.GetCursor()
+
 	if cx < 0 || cy < 0 || cy >= tb.Height || cx >= tb.Width {
 		cx, cy = tbX, tbY
 	}
 
-	cursorColor := color.RGBA{200, 200, 200, 180}
+	switch c.style.Shape {
+	case "underline":
+		c.drawUnderline(screen, cx, cy)
+	default:
+		c.drawBlock(screen, cx, cy)
+	}
+}
 
-	ebitenutil.DrawRect(
-		screen,
-		float64(cx*c.cellW),
-		float64(cy*c.cellH),
-		float64(c.cellW),
-		float64(c.cellH),
-		cursorColor,
-	)
+// Thread-safe getter for term buffer
+func (c *System) getTerm() *components.TermBuffer {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.term
 }
 

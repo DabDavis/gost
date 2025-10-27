@@ -7,7 +7,7 @@ import (
 	"github.com/creack/pty"
 )
 
-// startShell launches a login shell inside a pseudoterminal.
+// startShell launches an interactive shell session inside a PTY.
 func startShell(shell string) (*os.File, *exec.Cmd, error) {
 	cmd := exec.Command(shell, "-i")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")

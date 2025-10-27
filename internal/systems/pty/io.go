@@ -13,22 +13,21 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-// globalPTY stores the active PTY file and protects it via a mutex.
+// globalPTY stores the active PTY file and mutex.
 var globalPTY struct {
 	f  *os.File
 	mu sync.Mutex
 }
 
-// startResizeWatcher continuously updates the PTY size based on Ebiten's window.
+// startResizeWatcher resizes the PTY dynamically with the window.
 func startResizeWatcher(f *os.File, charWidth, charHeight int) {
 	go func() {
 		for {
 			w, h := ebiten.WindowSize()
-			err := pty.Setsize(f, &pty.Winsize{
+			if err := pty.Setsize(f, &pty.Winsize{
 				Rows: uint16(h / charHeight),
 				Cols: uint16(w / charWidth),
-			})
-			if err != nil {
+			}); err != nil {
 				log.Println("[PTY] resize error:", err)
 			}
 			time.Sleep(time.Second)
@@ -36,14 +35,12 @@ func startResizeWatcher(f *os.File, charWidth, charHeight int) {
 	}()
 }
 
-// readLoop continuously reads data from the PTY and publishes output events.
-// When the shell process exits, it gracefully signals ECS with "system_exit".
+// readLoop reads PTY output and emits events until the shell exits.
 func (s *System) readLoop(f *os.File, cmd *exec.Cmd) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			// Copy slice to prevent re-use of underlying buffer
 			data := append([]byte(nil), buf[:n]...)
 			s.bus.Publish("pty_output", data)
 		}
@@ -56,11 +53,7 @@ func (s *System) readLoop(f *os.File, cmd *exec.Cmd) {
 			break
 		}
 	}
-
-	// Ensure child process terminates fully
 	_ = cmd.Wait()
-
-	// Notify ECS to shut down
 	s.bus.Publish("system_exit", nil)
 	log.Println("[PTY] published system_exit event.")
 }

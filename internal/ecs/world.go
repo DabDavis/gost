@@ -5,27 +5,14 @@ import (
 	"sync"
 )
 
-// System defines a modular ECS component that can be updated every frame.
-// Systems are expected to be self-contained and thread-safe where applicable.
-type System interface {
-	UpdateECS()
-}
-
-// systemEntry pairs a system with its execution priority.
-type systemEntry struct {
-	System   System
-	Priority int
-}
-
 // World coordinates all ECS systems and manages their update order.
 type World struct {
-	mu       sync.RWMutex
-	systems  []systemEntry
-	sorted   bool
-	sortOnce sync.Once
+	mu      sync.RWMutex
+	systems []systemEntry
+	sorted  bool
 }
 
-// NewWorld initializes a new ECS World instance with small preallocation.
+// NewWorld initializes an ECS World with small preallocation.
 func NewWorld() *World {
 	return &World{
 		systems: make([]systemEntry, 0, 8),
@@ -33,7 +20,7 @@ func NewWorld() *World {
 }
 
 // AddSystem registers a system with an explicit priority.
-// Lower priorities execute earlier each frame (e.g., input before render).
+// Lower priorities execute earlier per frame.
 func (w *World) AddSystem(s System, priority int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -45,7 +32,7 @@ func (w *World) AddSystem(s System, priority int) {
 	w.sorted = false
 }
 
-// RemoveSystem unregisters a specific system from the world.
+// RemoveSystem unregisters a specific system.
 func (w *World) RemoveSystem(target System) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -59,8 +46,8 @@ func (w *World) RemoveSystem(target System) {
 	}
 }
 
-// Update runs all registered systems once per tick (~60Hz typical).
-// Systems are executed in ascending priority order.
+// Update runs all systems once per frame (~60Hz typical).
+// Systems execute in ascending priority order.
 func (w *World) Update() {
 	w.mu.Lock()
 	if !w.sorted {
@@ -73,7 +60,6 @@ func (w *World) Update() {
 
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-
 	for _, entry := range w.systems {
 		entry.System.UpdateECS()
 	}

@@ -1,22 +1,26 @@
 package ecs
 
-// Priority constants define default system update ordering for GoST.
-// Lower numbers run first each frame; higher numbers render or overlay last.
+// Priority constants define execution order for ECS systems.
+// Lower numbers run earlier per frame; higher numbers render later.
 const (
-	// --- Input & Core ---
-	PriorityInput      = 10 // keyboard/mouse → emits events
-	PriorityPTY        = 20 // terminal IO (read/write)
-	PriorityParser     = 30 // parses PTY → updates TermBuffer
-	PriorityScrollback = 40 // manages scrollback & history
+	// --- Configuration & Hot Reload ---
+	PriorityConfig     = 5
+	PriorityHotReload  = 6
 
-	// --- Rendering Layers ---
-	PriorityRender     = 50 // draws terminal grid
-	PriorityCursor     = 60 // draws text cursor
-	PrioritySelection  = 70 // draws selection region
-	PriorityOverlay    = 90 // transient overlays, HUD messages, etc.
+	// --- Core Input & I/O ---
+	PriorityInput      = 10
+	PriorityPTY        = 20
+	PriorityParser     = 30
+	PriorityScrollback = 40
 
-	// --- Reserved range for future use ---
-	PriorityUIBase     = 100 // for UI toolkits, windows, etc.
-	PriorityDebugTools = 200 // for developer overlays, profiling
+	// --- Rendering ---
+	PriorityRender     = 50
+	PrioritySelection  = 60
+	PriorityCursor     = 70
+	PriorityOverlay    = 80
+
+	// --- Optional Extensions ---
+	PriorityUIBase     = 100
+	PriorityDebugTools = 200
 )
 

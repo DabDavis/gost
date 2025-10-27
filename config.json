@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "renderer": {
+    "font_name": "basic",
+    "cell_width": 7,
+    "cell_height": 14
+  },
+  "theme": {
+    "name": "default",
+    "cursor_shape": "underline",
+    "cursor_blink": true,
+    "cursor_blink_rate": 300,
+    "cursor_color": [0, 255, 0],
+    "cursor_opacity": 220
+  },
+  "input": {
+    "ctrl_shift_copy": true,
+    "mouse_enabled": true
+  },
+  "system": {
+    "default_shell": "/bin/bash",
+    "scroll_step": 8
+  }
+}
+
