@@ -6,11 +6,16 @@ import (
 	"sync"
 	"time"
 
-	"gost/internal/events"
 	"gost/internal/ecs"
+	"gost/internal/events"
 )
 
-// System monitors a configuration file for changes and emits reload events.
+// -----------------------------------------------------------------------------
+// HotReload System
+// -----------------------------------------------------------------------------
+
+// System monitors a file (typically config.json) for modifications and
+// triggers an event-based reload when the file changes.
 type System struct {
 	bus      *events.Bus
 	path     string
@@ -19,35 +24,44 @@ type System struct {
 	interval time.Duration
 	enabled  bool
 	stopCh   chan struct{}
+	started  bool
 }
 
-// NewSystem creates a hotreload watcher that periodically checks for file changes.
+// NewSystem creates and launches a hot-reload watcher.
 func NewSystem(bus *events.Bus, path string) *System {
 	s := &System{
 		bus:      bus,
 		path:     path,
-		interval: 2 * time.Second, // reasonable default check interval
+		interval: 2 * time.Second,
 		enabled:  true,
 		stopCh:   make(chan struct{}),
 	}
-	go s.watchLoop()
 	return s
 }
 
-// UpdateECS is a no-op (the watcher runs asynchronously).
-func (s *System) UpdateECS() {}
+// UpdateECS starts the watcher loop once; ECS calls this once per tick.
+func (s *System) UpdateECS() {
+	if !s.started {
+		s.started = true
+		go s.watchLoop()
+	}
+}
 
-// watchLoop periodically polls the target file for modification time changes.
+// -----------------------------------------------------------------------------
+// Watch Loop
+// -----------------------------------------------------------------------------
+
 func (s *System) watchLoop() {
-	log.Printf("[HotReload] Watching %s for changes...\n", s.path)
+	log.Printf("[HotReload] Watching %s for changes every %v…", s.path, s.interval)
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-time.After(s.interval):
-			if !s.enabled {
-				continue
+		case <-ticker.C:
+			if s.enabled {
+				s.checkFile()
 			}
-			s.checkFile()
 		case <-s.stopCh:
 			log.Println("[HotReload] Stopped watcher.")
 			return
@@ -55,11 +69,14 @@ func (s *System) watchLoop() {
 	}
 }
 
-// checkFile compares modification time and triggers reload if changed.
+// -----------------------------------------------------------------------------
+// Core Logic
+// -----------------------------------------------------------------------------
+
 func (s *System) checkFile() {
 	info, err := os.Stat(s.path)
 	if err != nil {
-		// If file disappears temporarily, ignore.
+		// Missing file or permission issue — ignore.
 		return
 	}
 
@@ -75,23 +92,35 @@ func (s *System) checkFile() {
 
 	if modTime.After(s.lastMod) {
 		s.lastMod = modTime
-		log.Printf("[HotReload] Detected change in %s — requesting reload...\n", s.path)
+		log.Printf("[HotReload] Detected change in %s — publishing reload request.", s.path)
 		s.bus.Publish("config_reload_requested", s.path)
 	}
 }
 
-// Enable allows dynamic enabling/disabling of the watcher.
+// -----------------------------------------------------------------------------
+// Controls
+// -----------------------------------------------------------------------------
+
+// Enable dynamically enables/disables watching.
 func (s *System) Enable(state bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.enabled = state
 }
 
-// Stop cleanly terminates the background watcher goroutine.
+// Stop gracefully terminates the background watcher.
 func (s *System) Stop() {
-	close(s.stopCh)
+	select {
+	case <-s.stopCh:
+		// already closed
+	default:
+		close(s.stopCh)
+	}
 }
 
-// Interface check for ECS compliance.
+// -----------------------------------------------------------------------------
+// ECS Compliance
+// -----------------------------------------------------------------------------
+
 var _ ecs.System = (*System)(nil)
 

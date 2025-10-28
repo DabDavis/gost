@@ -1,16 +1,31 @@
 package pty
 
 import (
+	"bufio"
+	"io"
 	"log"
 	"os"
+	"os/exec"
+	"os/signal"
 	"sync"
+	"syscall"
 
+	"github.com/creack/pty"
 	"gost/internal/events"
 	"gost/internal/systems/input"
 )
 
 // -----------------------------------------------------------------------------
-// PTY System — manages the interactive shell session.
+// PTY Global Context
+// -----------------------------------------------------------------------------
+
+var globalPTY struct {
+	mu sync.Mutex
+	f  *os.File
+}
+
+// -----------------------------------------------------------------------------
+// PTY System
 // -----------------------------------------------------------------------------
 
 type System struct {
@@ -18,17 +33,17 @@ type System struct {
 	shell   string
 	started bool
 	mu      sync.Mutex
-	cmdKill func() // deferred cleanup
+	cmdKill func()
 }
 
-// NewSystem links PTY with input and initializes write hook.
+// NewSystem wires PTY with input + bus.
 func NewSystem(bus *events.Bus) *System {
 	ps := &System{
 		bus:   bus,
 		shell: defaultShell(),
 	}
 
-	// Link keyboard → PTY write handler
+	// keyboard → PTY
 	input.WriteToPTY = func(b []byte) {
 		globalPTY.mu.Lock()
 		defer globalPTY.mu.Unlock()
@@ -39,13 +54,10 @@ func NewSystem(bus *events.Bus) *System {
 		}
 	}
 
-	// Watch config updates
 	ps.subscribeConfigChanges()
-
 	return ps
 }
 
-// UpdateECS ensures the shell starts only once.
 func (s *System) UpdateECS() {
 	if s.started {
 		return
@@ -54,7 +66,10 @@ func (s *System) UpdateECS() {
 	s.launchShell()
 }
 
-// launchShell starts the PTY shell and its read loop.
+// -----------------------------------------------------------------------------
+// Shell Launch
+// -----------------------------------------------------------------------------
+
 func (s *System) launchShell() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -66,41 +81,111 @@ func (s *System) launchShell() {
 		return
 	}
 
-	// Keep references
+	globalPTY.mu.Lock()
 	globalPTY.f = f
+	globalPTY.mu.Unlock()
+
 	s.cmdKill = func() {
 		_ = cmd.Process.Kill()
 		_ = f.Close()
 	}
+
 	log.Println("[PTY] started shell:", s.shell)
 	s.bus.Publish("pty_restarted", s.shell)
 
-	startResizeWatcher(f, 7, 14)
+	startResizeWatcher(f)
 	go s.readLoop(f, cmd)
 }
 
-// restartShell cleanly restarts when shell path changes.
+// -----------------------------------------------------------------------------
+// Shell + IO
+// -----------------------------------------------------------------------------
+
+func startShell(shell string) (*os.File, *exec.Cmd, error) {
+	cmd := exec.Command(shell, "-i")
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	f, err := pty.Start(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, cmd, nil
+}
+
+func (s *System) readLoop(f *os.File, cmd *exec.Cmd) {
+	defer func() {
+		log.Println("[PTY] session ended.")
+		s.bus.Publish("pty_ended", nil)
+	}()
+
+	reader := bufio.NewReader(f)
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			out := make([]byte, n)
+			copy(out, buf[:n])
+			s.bus.Publish("pty_output", out)
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Println("[PTY] read error:", err)
+			}
+			return
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Resize watcher
+// -----------------------------------------------------------------------------
+
+// startResizeWatcher adjusts PTY size on SIGWINCH.
+func startResizeWatcher(f *os.File) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGWINCH)
+	go func() {
+		for range sigs {
+			if err := pty.InheritSize(os.Stdin, f); err != nil {
+				log.Println("[PTY] resize error:", err)
+			}
+		}
+	}()
+	_ = pty.InheritSize(os.Stdin, f)
+}
+
+// -----------------------------------------------------------------------------
+// Config + Helpers
+// -----------------------------------------------------------------------------
+
+func (s *System) subscribeConfigChanges() {
+	if s.bus == nil {
+		return
+	}
+	sub := s.bus.Subscribe("config_shell_updated")
+	go func() {
+		for evt := range sub {
+			if path, ok := evt.(string); ok && path != "" {
+				s.restartShell(path)
+			}
+		}
+	}()
+}
+
 func (s *System) restartShell(newShell string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if s.shell == newShell {
 		return
 	}
-
 	log.Printf("[PTY] restarting shell: %s → %s", s.shell, newShell)
-
-	// Terminate existing PTY
 	if s.cmdKill != nil {
 		s.cmdKill()
 		s.cmdKill = nil
 	}
-
 	s.shell = newShell
 	go s.launchShell()
 }
 
-// defaultShell returns a safe fallback.
 func defaultShell() string {
 	if sh := os.Getenv("SHELL"); sh != "" {
 		return sh

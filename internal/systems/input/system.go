@@ -8,12 +8,15 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Input System — ECS-compatible keyboard & mouse handler
+// Unified Input System
 // -----------------------------------------------------------------------------
 
 type System struct {
 	bus  *events.Bus
 	keys map[ebiten.Key]*keyState
+
+	isSelecting bool // mouse drag active
+	lastX, lastY int // last cursor position for selection
 }
 
 type keyState struct {
@@ -21,6 +24,7 @@ type keyState struct {
 	next    time.Time
 }
 
+// --- Key timing constants ---
 const (
 	repeatDelay  = 400 * time.Millisecond
 	repeatRate   = 35 * time.Millisecond
@@ -33,7 +37,13 @@ var (
 	lastExit time.Time
 )
 
-// NewSystem creates a new input system.
+// --- PTY writer callback (set externally) ---
+var WriteToPTY = func(b []byte) {}
+
+// -----------------------------------------------------------------------------
+// Constructor
+// -----------------------------------------------------------------------------
+
 func NewSystem(bus *events.Bus) *System {
 	return &System{
 		bus:  bus,
@@ -42,81 +52,150 @@ func NewSystem(bus *events.Bus) *System {
 }
 
 // -----------------------------------------------------------------------------
-// ECS Update Loop
+// ECS Loop
 // -----------------------------------------------------------------------------
 
-// UpdateECS polls input each frame and emits appropriate ECS events.
 func (s *System) UpdateECS() {
 	now := time.Now()
 
-	// 1. Regular key input → PTY
-	handlePrintable(s, now)
-	handleSpecial(s, now)
-
-	// 2. Scrollback input (line + page scroll)
+	s.handlePrintable(now)
+	s.handleSpecial(now)
 	s.handleScrollback(now)
-
-	// 3. Mouse scroll events
 	s.handleMouseScroll(now)
-
-	// 4. Global hotkeys (save/reload/exit)
 	s.handleGlobalHotkeys(now)
+	s.handleSelection()
 }
 
 // -----------------------------------------------------------------------------
-// Scrollback & Hotkeys
+// Keyboard Input
 // -----------------------------------------------------------------------------
 
-// handleScrollback publishes line or page scroll events.
+func (s *System) handlePrintable(now time.Time) {
+	for k := ebiten.KeyA; k <= ebiten.KeyZ; k++ {
+		if ebiten.IsKeyPressed(k) {
+			s.publishKeyAny()
+			alt := ebiten.IsKeyPressed(ebiten.KeyAlt)
+			b := byte('a' + (k - ebiten.KeyA))
+			if ebiten.IsKeyPressed(ebiten.KeyShift) {
+				b -= 32 // uppercase
+			}
+			WriteToPTY(buildSeq(alt, b))
+		}
+	}
+
+	for k := ebiten.Key0; k <= ebiten.Key9; k++ {
+		if ebiten.IsKeyPressed(k) {
+			s.publishKeyAny()
+			WriteToPTY(buildSeq(ebiten.IsKeyPressed(ebiten.KeyAlt), byte('0'+(k-ebiten.Key0))))
+		}
+	}
+}
+
+func (s *System) handleSpecial(now time.Time) {
+	keySeqs := map[ebiten.Key][]byte{
+		ebiten.KeyEnter:      {'\r'},
+		ebiten.KeyBackspace:  {0x7f},
+		ebiten.KeyTab:        {'\t'},
+		ebiten.KeyEscape:     {0x1b},
+		ebiten.KeyArrowUp:    []byte{0x1b, '[', 'A'},
+		ebiten.KeyArrowDown:  []byte{0x1b, '[', 'B'},
+		ebiten.KeyArrowRight: []byte{0x1b, '[', 'C'},
+		ebiten.KeyArrowLeft:  []byte{0x1b, '[', 'D'},
+	}
+
+	for k, seq := range keySeqs {
+		if ebiten.IsKeyPressed(k) {
+			s.publishKeyAny()
+			WriteToPTY(seq)
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Scrollback and Hotkeys
+// -----------------------------------------------------------------------------
+
 func (s *System) handleScrollback(now time.Time) {
 	pageUp := ebiten.IsKeyPressed(ebiten.KeyPageUp)
 	pageDown := ebiten.IsKeyPressed(ebiten.KeyPageDown)
 	shift := ebiten.IsKeyPressed(ebiten.KeyShift)
 
 	if shift {
-		// Shift + PageUp/PageDown → full-page scroll
 		handleBusKey(s, now, ebiten.KeyPageUp, pageUp, "scroll_page_up")
 		handleBusKey(s, now, ebiten.KeyPageDown, pageDown, "scroll_page_down")
 	} else {
-		// Regular PageUp/PageDown → line scroll
 		handleBusKey(s, now, ebiten.KeyPageUp, pageUp, "scroll_up")
 		handleBusKey(s, now, ebiten.KeyPageDown, pageDown, "scroll_down")
 	}
 }
 
-// handleGlobalHotkeys detects Ctrl+S (save), Ctrl+R (reload), and Shift+Alt+C (exit).
 func (s *System) handleGlobalHotkeys(now time.Time) {
 	ctrl := ebiten.IsKeyPressed(ebiten.KeyControl)
 	alt := ebiten.IsKeyPressed(ebiten.KeyAlt)
 	shift := ebiten.IsKeyPressed(ebiten.KeyShift)
 
-	// Ctrl + S → Save configuration
-	if ctrl && ebiten.IsKeyPressed(ebiten.KeyS) {
-		if now.Sub(lastSave) > saveCooldown {
-			lastSave = now
-			s.bus.Publish("config_save_requested", nil)
-		}
+	if ctrl && ebiten.IsKeyPressed(ebiten.KeyS) && now.Sub(lastSave) > saveCooldown {
+		lastSave = now
+		s.bus.Publish("config_save_requested", nil)
 	}
 
-	// Ctrl + R → Reload configuration
 	if ctrl && ebiten.IsKeyPressed(ebiten.KeyR) {
 		s.bus.Publish("config_reload_requested", nil)
 	}
 
-	// Shift + Alt + C → graceful exit
-	if shift && alt && ebiten.IsKeyPressed(ebiten.KeyC) {
-		if now.Sub(lastExit) > exitCooldown {
-			lastExit = now
-			s.bus.Publish("system_exit", nil)
-		}
+	if shift && alt && ebiten.IsKeyPressed(ebiten.KeyC) && now.Sub(lastExit) > exitCooldown {
+		lastExit = now
+		s.bus.Publish("system_exit", nil)
 	}
 }
 
 // -----------------------------------------------------------------------------
-// Debounce Helpers
+// Mouse Input + Selection Integration
 // -----------------------------------------------------------------------------
 
-// handleBusKey manages debounce for bus-published control keys.
+func (s *System) handleMouseScroll(now time.Time) {
+	_, dy := ebiten.Wheel()
+	if dy == 0 {
+		return
+	}
+	if dy > 0 {
+		s.bus.Publish("scroll_up", nil)
+	} else {
+		s.bus.Publish("scroll_down", nil)
+	}
+	s.publishKeyAny()
+}
+
+// handleSelection manages mouse drag selection (start, update, end).
+func (s *System) handleSelection() {
+	x, y := ebiten.CursorPosition()
+	leftPressed := ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft)
+
+	if leftPressed && !s.isSelecting {
+		s.isSelecting = true
+		s.lastX, s.lastY = x, y
+		s.bus.Publish("selection_start", map[string]int{"x": x, "y": y})
+		return
+	}
+
+	if leftPressed && s.isSelecting {
+		if x != s.lastX || y != s.lastY {
+			s.lastX, s.lastY = x, y
+			s.bus.Publish("selection_update", map[string]int{"x": x, "y": y})
+		}
+		return
+	}
+
+	if !leftPressed && s.isSelecting {
+		s.isSelecting = false
+		s.bus.Publish("selection_end", map[string]int{"x": x, "y": y})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
 func handleBusKey(s *System, now time.Time, key ebiten.Key, pressed bool, topic string) {
 	ks, ok := s.keys[key]
 	if !ok {
@@ -140,7 +219,13 @@ func handleBusKey(s *System, now time.Time, key ebiten.Key, pressed bool, topic 
 	}
 }
 
-// publishKeyAny notifies renderer to reset scrollback when *any* key is pressed.
+func buildSeq(alt bool, b byte) []byte {
+	if alt {
+		return append([]byte{0x1b}, b)
+	}
+	return []byte{b}
+}
+
 func (s *System) publishKeyAny() {
 	s.bus.Publish("key_any_pressed", nil)
 }
