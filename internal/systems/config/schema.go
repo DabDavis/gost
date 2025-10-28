@@ -1,7 +1,5 @@
 package config
 
-import "image/color"
-
 // RootConfig defines persistent user-editable settings.
 type RootConfig struct {
 	Version  string       `json:"version"`
@@ -76,28 +74,22 @@ func DefaultConfig() *RootConfig {
 
 // --- Accessors --------------------------------------------------------------
 
-func (r *RootConfig) GetCursorColor() color.Color {
-	return color.RGBA{
-		r.Theme.CursorColor[0],
-		r.Theme.CursorColor[1],
-		r.Theme.CursorColor[2],
-		r.Theme.CursorOpacity,
-	}
+// Accessor methods for configuration values
+func (r *RootConfig) GetCursorBlinkRate() int {
+        return r.Theme.CursorBlinkRate
 }
 
-func (r *RootConfig) GetCursorShape() string      { return r.Theme.CursorShape }
-func (r *RootConfig) GetCursorBlink() bool        { return r.Theme.CursorBlink }
-func (r *RootConfig) GetCursorBlinkRate() int     { return r.Theme.CursorBlinkRate }
 func (r *RootConfig) GetScrollStep() int {
-	if r.System.ScrollStep <= 0 {
-		return 5
-	}
-	return r.System.ScrollStep
+        if r.System.ScrollStep <= 0 {
+                return 5
+        }
+        return r.System.ScrollStep
 }
+
 func (r *RootConfig) GetDefaultShell() string {
-	if r.System.DefaultShell == "" {
-		return "/bin/bash"
-	}
-	return r.System.DefaultShell
+        if r.System.DefaultShell == "" {
+                return "/bin/bash"
+        }
+        return r.System.DefaultShell
 }
 

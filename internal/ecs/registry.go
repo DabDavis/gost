@@ -1,6 +1,7 @@
 package ecs
 
 import "reflect"
+import "sort"
 
 // SystemInfo describes one registered system for introspection.
 type SystemInfo struct {

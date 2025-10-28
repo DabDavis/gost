@@ -3,6 +3,7 @@ package selection
 import (
 	"gost/internal/components"
 	"gost/internal/events"
+	"github.com/hajimehoshi/ebiten/v2"
 )
 
 // System handles click-drag text selection and clipboard copy.
@@ -29,4 +30,8 @@ func NewSystem(buffer *components.TermBuffer, cellW, cellH int, bus *events.Bus)
 func (s *System) UpdateECS() {
 	s.UpdateSelectionInput()
 }
-
+// Draw is the public entrypoint for ECS rendering.
+// It delegates to DrawSelection to render highlight overlays.
+func (s *System) Draw(screen *ebiten.Image) {
+    s.DrawSelection(screen)
+}

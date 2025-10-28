@@ -6,7 +6,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"gost/internal/ecs"
-	"gost/internal/events"
+    	"gost/internal/events"
 )
 
 // GameSystem implements Ebiten’s Game interface.
@@ -50,11 +50,10 @@ func (g *GameSystem) Layout(outW, outH int) (int, int) {
 
 // StartGame builds ECS world and launches Ebiten loop.
 func StartGame() error {
-	world, bus, game := initECSWorld()
-	ebiten.SetWindowTitle("GoST Terminal")
-	ebiten.SetWindowResizable(true)
-	ebiten.SetWindowSize(800, 480)
-	ebiten.SetMaxTPS(60)
-	return ebiten.RunGame(game)
+    _, _, game := initECSWorld() // ✅ ignore world and bus
+    ebiten.SetWindowTitle("GoST Terminal")
+    ebiten.SetWindowResizable(true)
+    ebiten.SetWindowSize(800, 480)
+    ebiten.SetMaxTPS(60)
+    return ebiten.RunGame(game)
 }
-

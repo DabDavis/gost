@@ -82,4 +82,21 @@ func (c *System) getTerm() *components.TermBuffer {
 	defer c.mu.RUnlock()
 	return c.term
 }
+// Draw is the public entrypoint for ECS rendering.
+// It wraps DrawCursor with thread-safe visibility handling.
+func (c *System) Draw(screen *ebiten.Image) {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
 
+    if !c.blinkVisible || c.term == nil {
+        return
+    }
+
+    cx, cy := c.term.GetCursor()
+    switch c.style.Shape {
+    case "underline":
+        c.drawUnderline(screen, cx, cy)
+    default:
+        c.drawBlock(screen, cx, cy)
+    }
+}

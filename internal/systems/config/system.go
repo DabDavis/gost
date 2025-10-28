@@ -1,10 +1,7 @@
 package config
 
 import (
-	"encoding/json"
-	"io/ioutil"
 	"log"
-	"os"
 	"sync"
 
 	"gost/internal/ecs"
@@ -92,45 +89,6 @@ func (s *System) listenSave() {
 		s.bus.Publish("config_saved", s.Data())
 		log.Println("[Config] saved ✓")
 	}
-}
-
-// --- File I/O helpers -------------------------------------------------------
-
-// loadFromDisk reads or creates config.json
-func loadFromDisk(path string) (*RootConfig, error) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		log.Printf("[Config] %s not found — creating defaults.\n", path)
-		cfg := DefaultConfig()
-		if err := saveToDisk(path, cfg); err != nil {
-			return cfg, err
-		}
-		return cfg, nil
-	}
-	if err != nil {
-		return DefaultConfig(), err
-	}
-	defer f.Close()
-
-	bytes, err := ioutil.ReadAll(f)
-	if err != nil {
-		return DefaultConfig(), err
-	}
-
-	var cfg RootConfig
-	if err := json.Unmarshal(bytes, &cfg); err != nil {
-		return DefaultConfig(), err
-	}
-	return &cfg, nil
-}
-
-// saveToDisk writes the config JSON file.
-func saveToDisk(path string, cfg *RootConfig) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return ioutil.WriteFile(path, data, 0644)
 }
 
 // ECS compliance

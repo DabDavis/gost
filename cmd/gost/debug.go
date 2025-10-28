@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"reflect"
 	"strings"
 
 	"gost/internal/ecs"

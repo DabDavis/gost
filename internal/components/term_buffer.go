@@ -155,6 +155,17 @@ func (tb *TermBuffer) GetCursor() (int, int) {
 	return tb.CursorX, tb.CursorY
 }
 
+// --- Locking wrappers ---
+//
+// These methods expose safe locking access for external systems (e.g., render viewport)
+// without exposing the internal mutex directly. Use them sparingly — most callers should
+// prefer the higher-level SetRune/GetRune API.
+
+func (tb *TermBuffer) Lock()   { tb.mu.Lock() }
+func (tb *TermBuffer) Unlock() { tb.mu.Unlock() }
+func (tb *TermBuffer) RLock()  { tb.mu.RLock() }
+func (tb *TermBuffer) RUnlock() { tb.mu.RUnlock() }
+
 // --- Helpers ---
 
 func min(a, b int) int {
